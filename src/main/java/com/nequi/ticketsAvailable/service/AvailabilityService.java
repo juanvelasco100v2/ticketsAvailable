@@ -29,8 +29,6 @@ public class AvailabilityService {
         this.redisTemplate = redisTemplate;
     }
 
-    // Cambiado de @PostConstruct a @EventListener(ApplicationReadyEvent.class)
-    // Esto asegura que la app ya arrancó antes de intentar conectar, evitando fallos en el inicio del contexto.
     @EventListener(ApplicationReadyEvent.class)
     public void init() {
         logger.info("Initializing Redis listener for channel: {}", CHANNEL_NAME);
@@ -39,29 +37,42 @@ public class AvailabilityService {
         redisTemplate.listenToChannel(CHANNEL_NAME)
                 .map(message -> message.getMessage()) // Extraer el DTO del mensaje Redis
                 .doOnNext(dto -> {
-                    logger.debug("Received update for event {}: Available={}, Reserved={}", 
+                    // CAMBIO: Log level DEBUG -> INFO para visibilidad
+                    logger.info("Received update from Redis for event {}: Available={}, Reserved={}", 
                             dto.eventId(), dto.availableCapacity(), dto.reservedCount());
-                    sink.tryEmitNext(dto);
+                    
+                    Sinks.EmitResult result = sink.tryEmitNext(dto);
+                    if (result.isFailure()) {
+                        logger.warn("Failed to emit to sink: {}", result);
+                    }
                 })
                 .doOnError(e -> logger.error("Error listening to Redis channel", e))
-                .retryWhen(Retry.backoff(10, Duration.ofSeconds(2)) // Más reintentos
+                .retryWhen(Retry.backoff(10, Duration.ofSeconds(2))
                         .filter(e -> e instanceof RedisConnectionFailureException)
                         .doBeforeRetry(signal -> logger.warn("Retrying Redis connection... Attempt {}", signal.totalRetries() + 1)))
                 .subscribe(
-                        null, // onNext ya manejado en doOnNext
+                        null, 
                         error -> logger.error("Fatal error in Redis listener stream after retries", error)
                 );
     }
 
     public Flux<AvailabilityDTO> streamAvailability(String eventId) {
+        logger.info("New client connected to stream for event: {}", eventId);
         return sink.asFlux()
-                .filter(dto -> dto.eventId().equals(eventId))
-                .doOnCancel(() -> logger.debug("Client disconnected from stream for event {}", eventId));
+                .filter(dto -> {
+                    boolean match = dto.eventId().equals(eventId);
+                    if (match) {
+                        logger.info("Pushing update to client for event {}", eventId);
+                    }
+                    return match;
+                })
+                .doOnCancel(() -> logger.info("Client disconnected from stream for event {}", eventId));
     }
     
     public void publishUpdate(AvailabilityDTO update) {
-        // Publicar en el canal de Redis para que todas las instancias (si hubiera réplicas) reciban la actualización
+        logger.info("Publishing update to Redis channel {}: {}", CHANNEL_NAME, update);
         redisTemplate.convertAndSend(CHANNEL_NAME, update)
+                .doOnSuccess(count -> logger.info("Update published. Receivers: {}", count))
                 .doOnError(e -> logger.error("Error publishing update to Redis", e))
                 .subscribe();
     }
