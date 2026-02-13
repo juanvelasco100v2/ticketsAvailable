@@ -1,9 +1,10 @@
 package com.nequi.ticketsAvailable.service;
 
 import com.nequi.ticketsAvailable.dto.AvailabilityDTO;
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -28,7 +29,9 @@ public class AvailabilityService {
         this.redisTemplate = redisTemplate;
     }
 
-    @PostConstruct
+    // Cambiado de @PostConstruct a @EventListener(ApplicationReadyEvent.class)
+    // Esto asegura que la app ya arrancó antes de intentar conectar, evitando fallos en el inicio del contexto.
+    @EventListener(ApplicationReadyEvent.class)
     public void init() {
         logger.info("Initializing Redis listener for channel: {}", CHANNEL_NAME);
         
@@ -41,12 +44,12 @@ public class AvailabilityService {
                     sink.tryEmitNext(dto);
                 })
                 .doOnError(e -> logger.error("Error listening to Redis channel", e))
-                .retryWhen(Retry.backoff(5, Duration.ofSeconds(2))
+                .retryWhen(Retry.backoff(10, Duration.ofSeconds(2)) // Más reintentos
                         .filter(e -> e instanceof RedisConnectionFailureException)
                         .doBeforeRetry(signal -> logger.warn("Retrying Redis connection... Attempt {}", signal.totalRetries() + 1)))
                 .subscribe(
                         null, // onNext ya manejado en doOnNext
-                        error -> logger.error("Fatal error in Redis listener stream", error)
+                        error -> logger.error("Fatal error in Redis listener stream after retries", error)
                 );
     }
 
