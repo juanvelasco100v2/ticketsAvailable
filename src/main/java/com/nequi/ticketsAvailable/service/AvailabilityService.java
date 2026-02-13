@@ -20,7 +20,6 @@ public class AvailabilityService {
     private static final Logger logger = LoggerFactory.getLogger(AvailabilityService.class);
     private final ReactiveRedisTemplate<String, AvailabilityDTO> redisTemplate;
     
-    // Sink para multidifusión (Broadcasting)
     private final Sinks.Many<AvailabilityDTO> sink = Sinks.many().multicast().onBackpressureBuffer();
     
     private static final String CHANNEL_NAME = "events:availability";
@@ -33,12 +32,10 @@ public class AvailabilityService {
     public void init() {
         logger.info("Initializing Redis listener for channel: {}", CHANNEL_NAME);
         
-        // Escuchar el canal de Redis y emitir al Sink
         redisTemplate.listenToChannel(CHANNEL_NAME)
                 .map(message -> message.getMessage()) // Extraer el DTO del mensaje Redis
                 .doOnNext(dto -> {
-                    // CAMBIO: Log level DEBUG -> INFO para visibilidad
-                    logger.info("Received update from Redis for event {}: Available={}, Reserved={}", 
+                    logger.info("Received update from Redis for event {}: Available={}, Reserved={}",
                             dto.eventId(), dto.availableCapacity(), dto.reservedCount());
                     
                     Sinks.EmitResult result = sink.tryEmitNext(dto);
