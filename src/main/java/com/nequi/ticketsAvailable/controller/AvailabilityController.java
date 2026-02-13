@@ -27,7 +27,6 @@ public class AvailabilityController {
         return availabilityService.streamAvailability(eventId);
     }
 
-    // Endpoint auxiliar para simular actualizaciones (en producción esto vendría de DynamoDB Streams -> Lambda -> Redis)
     @PostMapping("/update")
     public Mono<Void> publishUpdate(@RequestBody AvailabilityDTO update) {
         availabilityService.publishUpdate(update);
