@@ -4,10 +4,14 @@ import com.nequi.ticketsAvailable.dto.AvailabilityDTO;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
 
 @Service
 public class AvailabilityService {
@@ -37,7 +41,13 @@ public class AvailabilityService {
                     sink.tryEmitNext(dto);
                 })
                 .doOnError(e -> logger.error("Error listening to Redis channel", e))
-                .subscribe();
+                .retryWhen(Retry.backoff(5, Duration.ofSeconds(2))
+                        .filter(e -> e instanceof RedisConnectionFailureException)
+                        .doBeforeRetry(signal -> logger.warn("Retrying Redis connection... Attempt {}", signal.totalRetries() + 1)))
+                .subscribe(
+                        null, // onNext ya manejado en doOnNext
+                        error -> logger.error("Fatal error in Redis listener stream", error)
+                );
     }
 
     public Flux<AvailabilityDTO> streamAvailability(String eventId) {
@@ -48,6 +58,8 @@ public class AvailabilityService {
     
     public void publishUpdate(AvailabilityDTO update) {
         // Publicar en el canal de Redis para que todas las instancias (si hubiera réplicas) reciban la actualización
-        redisTemplate.convertAndSend(CHANNEL_NAME, update).subscribe();
+        redisTemplate.convertAndSend(CHANNEL_NAME, update)
+                .doOnError(e -> logger.error("Error publishing update to Redis", e))
+                .subscribe();
     }
 }
